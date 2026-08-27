@@ -1,0 +1,36 @@
+# GRPO 强化学习配置
+# 数据由 scripts/03b_build_rl_prompts.py 生成（messages 形式，自动套 chat template）
+model_name_or_path: "checkpoints/sft"
+dataset_path: "data/processed/rl_prompts.jsonl"
+
+output_dir: "checkpoints/grpo"
+num_train_epochs: 1
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 8
+learning_rate: 1.0e-6
+lr_scheduler_type: "cosine"
+
+# GRPO 超参
+num_generations: 8            # G 需满足 2 <= G <= per_device_batch x num_processes 且整除
+max_completion_length: 2048
+temperature: 1.0
+beta: 0.04                    # KL 惩罚系数初值（退火起点）
+
+# KL 退火：训练早期强约束、后期放松，抑制 Reward Hacking
+kl_annealing:
+  enabled: true
+  beta_start: 0.1             # 起始 KL 系数
+  beta_end: 0.01              # 终止 KL 系数
+  schedule: "cosine"          # cosine | linear
+  total_steps: null           # null 时自动用 state.max_steps
+
+# 复合 Reward 权重
+reward:
+  format_weight: 1.0          # 格式硬约束
+  judge_weight: 1.0           # LLM-as-Judge 连续分
+  judge_base_url: "http://localhost:8001/v1"
+  judge_model: "Qwen/Qwen2.5-72B-Instruct"
+
+bf16: true
+gradient_checkpointing: true
+logging_steps: 5

@@ -1,0 +1,22 @@
+# SFT 配置
+model_name_or_path: "Qwen/Qwen2.5-7B-Instruct"
+dataset_path: "data/cot/train_cot_verified.jsonl"
+
+# 过程验证过滤：仅保留过程分达标且无谬误步骤的样本
+# （train_cot_verified.jsonl 由 scripts/03_process_verification.py 产出）
+min_process_score: 0.6
+max_fallacies: 0
+
+output_dir: "checkpoints/sft"
+num_train_epochs: 3
+per_device_train_batch_size: 2
+gradient_accumulation_steps: 8
+learning_rate: 2.0e-5
+lr_scheduler_type: "cosine"
+warmup_ratio: 0.03
+max_seq_length: 4096
+bf16: true
+gradient_checkpointing: true
+logging_steps: 10
+save_strategy: "steps"
+save_steps: 500

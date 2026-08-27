@@ -1,0 +1,22 @@
+# Core
+torch>=2.3.0
+transformers>=4.47.0
+datasets>=2.20.0
+accelerate>=1.2.0
+peft>=0.12.0
+# GRPO/SFT 接口按 trl==0.15.0 适配，升级 trl 需自行适配（0.11~1.x 的 reward 签名/beta/callback 差异大）
+trl==0.15.0
+
+# RL / distributed
+deepspeed>=0.15.0
+vllm>=0.6.0
+
+# Data / utils
+pandas>=2.0.0
+numpy>=1.26.0
+pyyaml>=6.0
+huggingface_hub>=0.24.0
+openai>=1.40.0
+tqdm
+fire
+einops

@@ -1,0 +1,25 @@
+# Models
+checkpoints/
+*.safetensors
+*.bin
+*.pt
+*.ckpt
+
+# Data
+data/raw/
+data/cot/
+data/processed/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Logs
+logs/
+*.log
+wandb/
+
+# OS
+.DS_Store

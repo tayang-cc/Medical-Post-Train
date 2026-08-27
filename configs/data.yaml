@@ -1,0 +1,27 @@
+# 数据与 CoT 构造配置
+base_model: "Qwen/Qwen2.5-7B-Instruct"
+teacher_model: "Qwen/Qwen2.5-72B-Instruct"   # 教师模型，生成 CoT 用（可换 DeepSeek-R1-Distill）
+judge_model: "Qwen/Qwen2.5-72B-Instruct"     # LLM-as-Judge 模型
+
+# 数据集
+datasets:
+  medqa: "medqa"            # huggingface 或本地路径
+  medmcqa: "medmcqa"
+
+# CoT 构造
+cot:
+  num_samples: 1            # 每题生成候选 CoT 条数
+  max_new_tokens: 2048
+  temperature: 0.7
+  top_p: 0.9
+  keep_only_correct: true   # 只保留最终答案正确的轨迹
+
+# 过程验证 (PRM / LLM-as-Judge)
+process_verification:
+  step_granularity: "sentence"   # sentence | paragraph
+  score_threshold: 0.5           # 过程分低于阈值的中间步骤被标记为谬误
+  mode: "llm_judge"              # llm_judge | rule
+
+# 输出路径
+output_dir: "data"
+vllm_base_url: "http://localhost:8000/v1"
