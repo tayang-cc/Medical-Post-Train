@@ -1,0 +1,22 @@
+# accelerate 启动配置（配合 scripts/04_train_sft.sh / 05_train_grpo.sh 使用）
+#
+# 说明：
+# - 这是 accelerate 配置，真正的 DeepSpeed 参数在 configs/ds_zero3.json（通过 deepspeed_config_file 引入）
+# - 默认 8 卡；单卡请加命令行参数: accelerate launch --config_file configs/accelerate.yaml --num_processes 1
+compute_environment: LOCAL_MACHINE
+distributed_type: DEEPSPEED
+deepspeed_config:
+  deepspeed_config_file: configs/ds_zero3.json
+  zero3_init_flag: true
+fsdp_config: {}
+machine_rank: 0
+main_training_function: main
+mixed_precision: null
+num_machines: 1
+num_processes: 8
+rdzv_backend: static
+same_network: true
+tpu_env: []
+tpu_use_cluster: false
+tpu_use_sudo: false
+use_cpu: false

@@ -55,8 +55,9 @@ python scripts/03_process_verification.py --config configs/data.yaml
 # 4b. 构造 GRPO 训练数据（rl_prompts.jsonl）
 python scripts/03b_build_rl_prompts.py
 
-# 5. SFT（多卡；单卡加 --num_processes 1）
+# 5. SFT（多卡；单卡加 --num_processes 1；单卡低显存加 --lora 直接 python 跑）
 bash scripts/04_train_sft.sh
+# 单卡 LoRA 版：python src/train/sft.py --config configs/sft.yaml --lora
 
 # 6. GRPO 强化学习（先起 Judge vLLM，见 scripts/05_train_grpo.sh 注释）
 bash scripts/serve_vllm.sh Qwen/Qwen2.5-32B-Instruct-AWQ 8001 1
@@ -104,3 +105,27 @@ bash scripts/serve_vllm.sh Qwen/Qwen2.5-72B-Instruct 8001 1
 - **Judge 成本**：RL 每步会对每组 G 条采样各调一次 72B Judge，是主要开销。可先用小数据集验证，后续建议 LoRA 训练专用 verifier 替换。
 - **DAPO vs GRPO**：`configs/dapo.yaml` 默认去掉 KL 惩罚（论文 §2.3，`beta=0`）、`eps_low=0.2 / eps_high=0.28`。由于 trl 0.15 没有 old-policy 缓冲，clip-higher 的 ratio 采用「当前策略 vs 冻结参考模型」，语义等价（见 `src/train/dapo.py` 文件头注释）。想保留 KL 约束可把 `beta` 调回 0.001~0.04 并开启 `kl_annealing`。
 - **LoRA 单卡**：`--lora` 开关（`src/train/lora.py`）。注意 trl 0.15 在 deepspeed zero3 + peft 下仍加载独立 ref model（省显存失效），所以 LoRA 必须**直接 `python` 单进程跑**（`scripts/05*_lora.sh`），且 `per_device_train_batch_size >= num_generations`。LoRA 训练产物是 adapter，评测前需用 `vllm serve <基座> --enable-lora --lora-modules name=<checkpoints/...>` 挂载，或先 merge 成完整权重。
+
+## 实验记录（Smoke Test）
+
+> 2026-08 冒烟验证：管线端到端跑通 + 拿到对比表。完整复现方式见下文「说明」。
+
+- **数据**：CMB（中文医学基准，FreedomIntelligence 出品）。训练侧用 CMB-val 官方解析（`explanation`）当 CoT（240 条，因 vllm/Blackwell 未解决故跳过 teacher 生成）；RL 侧用 CMB-train 前 40 条。
+- **评测集**：CMB-train 尾部 hold-out **200 题**（与训练侧无交集）。
+- **基座**：`Qwen/Qwen2.5-7B-Instruct`，LoRA（r=16, alpha=32, all-linear），单卡 RTX PRO 6000 Blackwell 97.8G。
+
+| 模型 | acc | miss | avg_len | 训练规模 |
+|---|---|---|---|---|
+| 基座（零样本） | **0.725** | 0.005 | 281 | — |
+| SFT (LoRA) | 0.680 | 0.065 | 284 | 240 条 CoT × 3 epochs |
+| GRPO (LoRA) | **0.755** | 0.005 | 279 | 基座起训，40 题 × G=4 × 5 步，纯规则 reward（格式 0/1） |
+
+**结论**：
+1. 全链路（数据 → SFT → GRPO → 评测）跑通，产物格式正确。
+2. GRPO 用纯规则 reward 仅 5 步就把准确率从 72.5% 提到 75.5%、miss 收敛到 0.5% —— 说明「格式硬约束 + 组内相对优势」能快速教会模型稳定输出答案格式。
+3. SFT 反降（68.0%）：240 条样本过少 + 长解析 CoT 过拟合 + miss 升高（6.5%），符合「小数据 SFT 有害」的已知现象，属可解释结果。
+
+**已知限制（正式实验前必须解决）**：
+- **vllm 0.27 + Blackwell 不可用**（flashinfer 不支持 sm120，且无 nvcc 无法现场编译），故本轮绕开了 teacher CoT 生成与 LLM-judge：SFT 用 val 官方解析、GRPO 用纯规则 reward、评测用 transformers 直出。
+- 训练环境的坑已逐个修掉：trl 0.15 需配 transformers 4.49（`_get_train_sampler` / `self.control` 兼容）；LoRA `target_modules` 必须传字符串 `"all-linear"`（不能是列表）；GRPO 收尾保存因 trl/transformers 的 control bug 崩溃，已在 `MedicalGRPOTrainer.train()` 加兜底捕获。
+- 训练数据格式：SFT 的 dataset 直接用 `prompt`/`completion` 消息列（勿用 `formatting_func` 返回消息列表，trl 0.15 会误判为 batch）。

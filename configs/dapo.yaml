@@ -35,8 +35,9 @@ dapo:
 reward:
   format_weight: 1.0          # 格式硬约束
   judge_weight: 1.0           # LLM-as-Judge 连续分
+  judge_enabled: true         # false = 纯规则 reward（格式 0/1），可跳过 judge 模型
   judge_base_url: "http://localhost:8001/v1"
-  judge_model: "Qwen/Qwen2.5-72B-Instruct"
+  judge_model: "Qwen/Qwen2.5-32B-Instruct-AWQ"
 
 bf16: true
 gradient_checkpointing: true

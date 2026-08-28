@@ -1,6 +1,6 @@
 # SFT 配置
-model_name_or_path: "Qwen/Qwen2.5-7B-Instruct"
-dataset_path: "data/cot/train_cot_verified.jsonl"
+model_name_or_path: "/root/autodl-tmp/models/Qwen2.5-7B-Instruct"
+dataset_path: "data/cot/smoke_cot.jsonl"
 
 # 过程验证过滤：仅保留过程分达标且无谬误步骤的样本
 # （train_cot_verified.jsonl 由 scripts/03_process_verification.py 产出）

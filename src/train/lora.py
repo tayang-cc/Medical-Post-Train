@@ -27,7 +27,7 @@ def build_lora_config(args: argparse.Namespace):
 
     raw = args.lora_target_modules.strip()
     targets = (
-        ["all-linear"]
+        "all-linear"  # peft 魔法字符串，展开为全部线性层；列表形式会被当字面模块名
         if raw.lower() == "all-linear"
         else [m.strip() for m in raw.split(",") if m.strip()]
     )

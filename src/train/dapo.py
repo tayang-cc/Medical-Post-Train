@@ -170,6 +170,7 @@ def main() -> None:
         judge_model=cfg["reward"]["judge_model"],
         format_weight=cfg["reward"]["format_weight"],
         judge_weight=cfg["reward"]["judge_weight"],
+        enable_judge=cfg["reward"].get("judge_enabled", True),
     )
 
     def reward_func(prompts, completions, question, answer, **kwargs):

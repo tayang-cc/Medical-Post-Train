@@ -1,7 +1,7 @@
 # 数据与 CoT 构造配置
 base_model: "Qwen/Qwen2.5-7B-Instruct"
-teacher_model: "Qwen/Qwen2.5-72B-Instruct"   # 教师模型，生成 CoT 用（可换 DeepSeek-R1-Distill）
-judge_model: "Qwen/Qwen2.5-72B-Instruct"     # LLM-as-Judge 模型
+teacher_model: "/root/autodl-tmp/models/Qwen2.5-32B-Instruct-AWQ"   # 教师模型，生成 CoT 用（可换 DeepSeek-R1-Distill）
+judge_model: "/root/autodl-tmp/models/Qwen2.5-32B-Instruct-AWQ"     # LLM-as-Judge 模型
 
 # 数据集
 datasets:

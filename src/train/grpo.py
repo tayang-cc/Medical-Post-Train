@@ -40,9 +40,14 @@ def load_prompts(path: str) -> Dataset:
             if not line:
                 continue
             r = json.loads(line)
+            # 优先用 03b 已构造好的 messages prompt，兼容 {question, options} 原始格式
+            if isinstance(r.get("prompt"), list):
+                prompt = r["prompt"]
+            else:
+                prompt = build_prompt(r["question"], r["options"])
             rows.append(
                 {
-                    "prompt": build_prompt(r["question"], r["options"]),
+                    "prompt": prompt,
                     "question": r["question"],
                     "answer": r["answer"],
                 }
@@ -102,6 +107,20 @@ class MedicalGRPOTrainer(GRPOTrainer):
         self._policy_entropy = None
         self._last_policy_logps = None
 
+    def _prepare_inputs(self, inputs):
+        # trl 0.15 在 ref logps 计算时用 disable_adapter()，某些 peft 版本退出后
+        # adapter 未恢复启用，导致 compute_loss 前向无梯度。这里显式恢复。
+        result = super()._prepare_inputs(inputs)
+        model = getattr(self, "model", None)
+        if model is not None:
+            try:
+                unwrapped = self.accelerator.unwrap_model(model)
+                if hasattr(unwrapped, "enable_adapter"):
+                    unwrapped.enable_adapter()
+            except Exception:
+                pass
+        return result
+
     def _get_per_token_logps(self, model, input_ids, attention_mask, logits_to_keep):
         logps = super()._get_per_token_logps(
             model, input_ids, attention_mask, logits_to_keep
@@ -119,6 +138,18 @@ class MedicalGRPOTrainer(GRPOTrainer):
         )
         self._compute_entropy_proxy(inputs)
         return loss
+
+    def train(self, *args, **kwargs):
+        # trl 0.15 + 部分 transformers 版本在训练收尾 _maybe_log_save_evaluate
+        # 会因 self.control 类型问题崩溃（训练本身已完成）。捕获后手动保存。
+        try:
+            return super().train(*args, **kwargs)
+        except AttributeError as e:
+            if "should_evaluate" in str(e):
+                print("[GRPO] 训练已完成，收尾保存崩溃被捕获，手动保存模型")
+                self.save_model(self.args.output_dir)
+                return
+            raise
 
     @torch.no_grad()
     def _compute_entropy_proxy(self, inputs):
@@ -170,6 +201,7 @@ def main() -> None:
         judge_model=cfg["reward"]["judge_model"],
         format_weight=cfg["reward"]["format_weight"],
         judge_weight=cfg["reward"]["judge_weight"],
+        enable_judge=cfg["reward"].get("judge_enabled", True),
     )
 
     def reward_func(prompts, completions, question, answer, **kwargs):

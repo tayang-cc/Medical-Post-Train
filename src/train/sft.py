@@ -13,6 +13,8 @@ import yaml
 from datasets import Dataset
 from trl import SFTConfig, SFTTrainer
 
+from src.train.lora import add_lora_args, build_lora_config
+
 
 def build_prompt(question: str, options: dict) -> str:
     opt_text = "\n".join(f"{k}. {v}" for k, v in options.items())
@@ -49,10 +51,16 @@ def load_cot_data(
             if max_fallacies is not None and r.get("num_fallacies") is not None:
                 if r["num_fallacies"] > max_fallacies:
                     continue
+            # 用消息列表：trl 0.15 会把 prompt/completion 拼成 messages 并套 chat template
             rows.append(
                 {
-                    "prompt": build_prompt(r["question"], r["options"]),
-                    "completion": normalize_completion(r["cot"], r["answer"]),
+                    "prompt": [
+                        {"role": "user", "content": build_prompt(r["question"], r["options"])}
+                    ],
+                    "completion": [
+                        {"role": "assistant",
+                         "content": normalize_completion(r["cot"], r["answer"])}
+                    ],
                 }
             )
     return Dataset.from_list(rows)
@@ -61,22 +69,24 @@ def load_cot_data(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/sft.yaml")
+    add_lora_args(parser)
     args = parser.parse_args()
 
     with open(args.config, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
+
+    lora_config = build_lora_config(args)
+    if lora_config is not None:
+        print(
+            "[LoRA] 已启用 LoRA；单卡请直接 python 运行本脚本"
+            "（全参 7B + fp32 AdamW 优化器在 48G 单卡会 OOM）"
+        )
 
     dataset = load_cot_data(
         cfg["dataset_path"],
         min_process_score=cfg.get("min_process_score"),
         max_fallacies=cfg.get("max_fallacies"),
     )
-
-    def formatting_func(example):
-        return [
-            {"role": "user", "content": example["prompt"]},
-            {"role": "assistant", "content": example["completion"]},
-        ]
 
     sft_config = SFTConfig(
         output_dir=cfg["output_dir"],
@@ -98,7 +108,7 @@ def main() -> None:
         model=cfg["model_name_or_path"],
         args=sft_config,
         train_dataset=dataset,
-        formatting_func=formatting_func,
+        peft_config=lora_config,
     )
     trainer.train()
     trainer.save_model(cfg["output_dir"])

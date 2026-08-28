@@ -60,6 +60,7 @@ class CompositeReward:
     format_weight: float = 1.0
     judge_weight: float = 1.0
     judge_max_workers: int = 8
+    enable_judge: bool = True  # False = 纯规则 reward（跳过 LLM-as-Judge，无需 judge 模型）
 
     _client: Any = field(init=False, repr=False)
 
@@ -90,12 +91,15 @@ class CompositeReward:
         self, completions: list[Any], questions: list[str], answers: list[str]
     ) -> list[float]:
         fmt = [format_reward(c, a) for c, a in zip(completions, answers)]
-        with ThreadPoolExecutor(max_workers=self.judge_max_workers) as ex:
-            futures = [
-                ex.submit(self.judge_score, q, a, c)
-                for c, q, a in zip(completions, questions, answers)
-            ]
-            jdg = [f.result() for f in futures]
+        if self.enable_judge:
+            with ThreadPoolExecutor(max_workers=self.judge_max_workers) as ex:
+                futures = [
+                    ex.submit(self.judge_score, q, a, c)
+                    for c, q, a in zip(completions, questions, answers)
+                ]
+                jdg = [f.result() for f in futures]
+        else:
+            jdg = [0.0] * len(completions)
         return [
             self.format_weight * f + self.judge_weight * j
             for f, j in zip(fmt, jdg)
