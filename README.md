@@ -65,8 +65,9 @@ bash scripts/05_train_grpo.sh
 # 6b. 或改用 DAPO（token-level loss + clip-higher + dynamic sampling + overlong shaping）
 bash scripts/05b_train_dapo.sh
 
-# 7. 评测（先起待评测模型 vLLM）
+# 7. 评测（双轨：抽取准确率 + LLM-as-Judge 质量分）
 bash scripts/serve_vllm.sh checkpoints/grpo 8000 1
+bash scripts/serve_vllm.sh Qwen/Qwen2.5-32B-Instruct-AWQ 8001 1   # judge 轨，可省
 bash scripts/06_eval.sh
 ```
 
@@ -77,6 +78,7 @@ bash scripts/06_eval.sh
 - `src/data/process_verification.py`：LLM-as-Judge 过程监督打分
 - `src/train/grpo.py`：GRPO 强化学习 + KL 退火（`KLAnnealingCallback`）+ 熵监控（`MedicalGRPOTrainer` / `MonitoringCallback`）
 - `src/train/dapo.py`：DAPO（`DAPOTrainer`）＝ GRPO + token-level loss + clip-higher + dynamic sampling + overlong shaping（参考 DAPO 论文）
+- `src/eval/medqa.py`：MedQA / MedMCQA 评测，双轨制 = 抽取准确率（acc / miss_rate / avg_length）+ LLM-as-Judge 质量分（judge_mean / judge_pass_rate），方便基座/SFT/GRPO/DAPO 横向对比
 - `scripts/serve_vllm.sh`：vLLM 服务启动（教师 / Judge 模型通用）
 
 ## 模型服务（vLLM）
