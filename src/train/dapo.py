@@ -35,6 +35,7 @@ from src.train.grpo import (
     load_prompts,
 )
 from src.reward.composite import CompositeReward
+from src.train.lora import add_lora_args, build_lora_config
 
 
 class DAPOTrainer(MedicalGRPOTrainer):
@@ -146,10 +147,19 @@ class DAPOTrainer(MedicalGRPOTrainer):
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/dapo.yaml")
+    parser.add_argument("--per-device-train-batch-size", type=int, default=None,
+                        help="覆盖配置里的 batch size（单卡 LoRA 建议 >= num_generations）")
+    parser.add_argument("--num-generations", type=int, default=None)
+    add_lora_args(parser)
     args = parser.parse_args()
 
     with open(args.config, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
+
+    if args.per_device_train_batch_size is not None:
+        cfg["per_device_train_batch_size"] = args.per_device_train_batch_size
+    if args.num_generations is not None:
+        cfg["num_generations"] = args.num_generations
 
     check_generations(cfg)
 
@@ -187,11 +197,19 @@ def main() -> None:
         logging_steps=cfg["logging_steps"],
     )
 
+    lora_config = build_lora_config(args)
+    if lora_config is not None:
+        print(
+            "[LoRA] 已启用 LoRA；单卡请直接 python 运行本脚本（勿走 accelerate/deepspeed，"
+            "trl 0.15 在 zero3+peft 下仍会加载独立 ref model，反而吃显存）。"
+        )
+
     trainer = DAPOTrainer(
         model=cfg["model_name_or_path"],
         args=grpo_config,
         train_dataset=dataset,
         reward_funcs=reward_func,
+        peft_config=lora_config,
     )
 
     d = cfg.get("dapo", {})

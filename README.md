@@ -59,11 +59,15 @@ python scripts/03b_build_rl_prompts.py
 bash scripts/04_train_sft.sh
 
 # 6. GRPO 强化学习（先起 Judge vLLM，见 scripts/05_train_grpo.sh 注释）
-bash scripts/serve_vllm.sh Qwen/Qwen2.5-72B-Instruct 8001 1
+bash scripts/serve_vllm.sh Qwen/Qwen2.5-32B-Instruct-AWQ 8001 1
 bash scripts/05_train_grpo.sh
 
 # 6b. 或改用 DAPO（token-level loss + clip-higher + dynamic sampling + overlong shaping）
 bash scripts/05b_train_dapo.sh
+
+# 6c. 单卡低显存：LoRA 版（直接 python 单进程，勿走 accelerate/deepspeed）
+bash scripts/05_train_grpo_lora.sh     # GRPO + LoRA
+bash scripts/05b_train_dapo_lora.sh    # DAPO + LoRA
 
 # 7. 评测（双轨：抽取准确率 + LLM-as-Judge 质量分）
 bash scripts/serve_vllm.sh checkpoints/grpo 8000 1
@@ -99,3 +103,4 @@ bash scripts/serve_vllm.sh Qwen/Qwen2.5-72B-Instruct 8001 1
 - **数据链路**：SFT 输入为 `03` 步产出的 `train_cot_verified.jsonl`（已按 `min_process_score` / `max_fallacies` 过滤）；GRPO 输入为 `03b` 步产出的 `data/processed/rl_prompts.jsonl`。
 - **Judge 成本**：RL 每步会对每组 G 条采样各调一次 72B Judge，是主要开销。可先用小数据集验证，后续建议 LoRA 训练专用 verifier 替换。
 - **DAPO vs GRPO**：`configs/dapo.yaml` 默认去掉 KL 惩罚（论文 §2.3，`beta=0`）、`eps_low=0.2 / eps_high=0.28`。由于 trl 0.15 没有 old-policy 缓冲，clip-higher 的 ratio 采用「当前策略 vs 冻结参考模型」，语义等价（见 `src/train/dapo.py` 文件头注释）。想保留 KL 约束可把 `beta` 调回 0.001~0.04 并开启 `kl_annealing`。
+- **LoRA 单卡**：`--lora` 开关（`src/train/lora.py`）。注意 trl 0.15 在 deepspeed zero3 + peft 下仍加载独立 ref model（省显存失效），所以 LoRA 必须**直接 `python` 单进程跑**（`scripts/05*_lora.sh`），且 `per_device_train_batch_size >= num_generations`。LoRA 训练产物是 adapter，评测前需用 `vllm serve <基座> --enable-lora --lora-modules name=<checkpoints/...>` 挂载，或先 merge 成完整权重。
