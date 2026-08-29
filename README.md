@@ -119,13 +119,32 @@ bash scripts/serve_vllm.sh Qwen/Qwen2.5-72B-Instruct 8001 1
 | 基座（零样本） | **0.725** | 0.005 | 281 | — |
 | SFT (LoRA) | 0.680 | 0.065 | 284 | 240 条 CoT × 3 epochs |
 | GRPO (LoRA) | **0.755** | 0.005 | 279 | 基座起训，40 题 × G=4 × 5 步，纯规则 reward（格式 0/1） |
+| GRPO (LoRA, 熵正则 0.001) | 0.730 | 0.005 | 273 | 同上 + `entropy_coef=0.001`，loss 由 0.0→-0.0008（熵项生效） |
 
 **结论**：
 1. 全链路（数据 → SFT → GRPO → 评测）跑通，产物格式正确。
 2. GRPO 用纯规则 reward 仅 5 步就把准确率从 72.5% 提到 75.5%、miss 收敛到 0.5% —— 说明「格式硬约束 + 组内相对优势」能快速教会模型稳定输出答案格式。
 3. SFT 反降（68.0%）：240 条样本过少 + 长解析 CoT 过拟合 + miss 升高（6.5%），符合「小数据 SFT 有害」的已知现象，属可解释结果。
+4. **熵正则（`entropy_coef`）已实现并验证「生效」**：loss 从 0.0 变为 -0.0008，`policy_entropy` 进入日志监控。但 5 步冒烟下 acc 73.0% vs 75.5% 的差异属采样噪声且混入了 transformers 版本更换（4.50→4.49），**未形成「提升」证据**；需要同版本+固定 seed+更多步数的干净 A/B 才能下结论。
+
+### 正式实验（2026-08，SFT 1605 条 + GRPO 200 题 × 25 步 + LLM-judge）
+
+- SFT：teacher(32B) 生成 2000 题 CoT → 保留 1605 条正确 → 过程验证(LLM-judge 逐句打分，但 judge 校准偏严，均值 0.33，SFT 未按 process_score 过滤) → LoRA SFT。
+- GRPO：基座 + LoRA，200 题 × G=4 × 25 步，**LLM-judge 连续 reward + 格式硬约束**（复合 reward）。
+
+| 模型 | acc | miss | avg_len | 说明 |
+|---|---|---|---|---|
+| 基座（零样本） | **0.735** | 0.005 | 277 | — |
+| SFT (LoRA, 1605 CoT) | 0.680 | 0.010 | 398 | 过拟合，反降（两次实验一致） |
+| GRPO (LoRA, 200题, LLM-judge) | 0.725 | 0.005 | 275 | ≈基座，未复现纯规则 reward 的提升 |
+
+**正式实验结论（诚实）**：
+1. 完整管线（数据→CoT→过程验证→SFT→GRPO→评测）端到端跑通，LLM-judge 真实参与 RL。
+2. **SFT 小数据过拟合是稳定结论**（两次实验 SFT 均低于基座），1605 条对 7B 全参/LoRA 都偏少，需放大数据或混通用数据防过拟合。
+3. **LLM-judge 校准是 GRPO 未能超越基座的最可能根因**：judge 打分均值 0.33、区分度差，组内相对优势被噪声淹没（对比：纯规则 reward 的 GRPO 在冒烟中 75.5% > 基座 72.5%）。
+4. 待办：校准 judge → 放大 SFT 数据 → merge SFT→GRPO 标准链路 → 试 DAPO。
 
 **已知限制（正式实验前必须解决）**：
-- **vllm 0.27 + Blackwell 不可用**（flashinfer 不支持 sm120，且无 nvcc 无法现场编译），故本轮绕开了 teacher CoT 生成与 LLM-judge：SFT 用 val 官方解析、GRPO 用纯规则 reward、评测用 transformers 直出。
+- ~~**vllm 0.27 + Blackwell 不可用**~~ **已解决（2026-08）**：base 环境装 `flashinfer-python==0.6.18`（清华源）+ `flashinfer-cubin==0.6.18`（GitHub releases），并给 `flashinfer/jit/core.py` 的 `check_cuda_arch` 打补丁（把对 sm120 的误拒 `raise` 改为 `return`，cubin 0.6.18 含 sm120 预编译内核）。补丁在 site-packages 里，系统盘重置后需重打；也可升级 flashinfer 到原生支持 sm120 的版本替代。vllm 0.27.1 现可在 RTX PRO 6000 Blackwell 上正常 serve 32B AWQ。
 - 训练环境的坑已逐个修掉：trl 0.15 需配 transformers 4.49（`_get_train_sampler` / `self.control` 兼容）；LoRA `target_modules` 必须传字符串 `"all-linear"`（不能是列表）；GRPO 收尾保存因 trl/transformers 的 control bug 崩溃，已在 `MedicalGRPOTrainer.train()` 加兜底捕获。
 - 训练数据格式：SFT 的 dataset 直接用 `prompt`/`completion` 消息列（勿用 `formatting_func` 返回消息列表，trl 0.15 会误判为 batch）。

@@ -31,6 +31,9 @@ dapo:
   max_length: 2048            # L_max，建议 = max_completion_length
   punish_cache: 256           # L_cache：软惩罚区间长度
 
+# 熵正则：loss += entropy_coef * mean(log p)，配合 clip-higher 防策略坍缩
+entropy_coef: 0.002
+
 # 复合 Reward 权重
 reward:
   format_weight: 1.0          # 格式硬约束

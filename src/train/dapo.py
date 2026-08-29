@@ -51,6 +51,7 @@ class DAPOTrainer(MedicalGRPOTrainer):
         self.dapo_overlong_shaping = True
         self.dapo_max_length = self.max_completion_length
         self.dapo_punish_cache = 256
+        self.entropy_coef = 0.0  # 熵正则系数；>0 时在 loss 中加熵奖励，抑制策略坍缩
 
     def compute_loss(self, model, inputs, return_outputs=False,
                      num_items_in_batch=None):
@@ -130,6 +131,13 @@ class DAPOTrainer(MedicalGRPOTrainer):
         masked = per_token_loss * completion_mask * keep
         denom = (completion_mask * keep).sum().clamp(min=1.0)
         loss = masked.sum() / denom
+
+        # ---------- 熵正则：loss += entropy_coef * mean(log p)（采样代理 = -H 奖励）----------
+        if self.entropy_coef > 0:
+            e_denom = completion_mask.sum().clamp(min=1.0)
+            loss = loss + self.entropy_coef * (
+                per_token_logps * completion_mask
+            ).sum() / e_denom
 
         # 与 GRPO 同口径的监控指标
         completion_length = completion_mask.sum(dim=1).float().mean().item()
@@ -221,6 +229,7 @@ def main() -> None:
     trainer.dapo_overlong_shaping = bool(d.get("overlong_shaping", True))
     trainer.dapo_max_length = float(d.get("max_length", cfg["max_completion_length"]))
     trainer.dapo_punish_cache = float(d.get("punish_cache", 256))
+    trainer.entropy_coef = float(cfg.get("entropy_coef", 0.0))
 
     anneal = cfg.get("kl_annealing", {})
     if anneal.get("enabled", False):

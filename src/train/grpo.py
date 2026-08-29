@@ -106,6 +106,8 @@ class MedicalGRPOTrainer(GRPOTrainer):
         super().__init__(*args, **kwargs)
         self._policy_entropy = None
         self._last_policy_logps = None
+        self._last_policy_logps_raw = None
+        self.entropy_coef = 0.0  # 熵正则系数；>0 时在 loss 中加熵奖励，抑制策略坍缩
 
     def _prepare_inputs(self, inputs):
         # trl 0.15 在 ref logps 计算时用 disable_adapter()，某些 peft 版本退出后
@@ -127,6 +129,7 @@ class MedicalGRPOTrainer(GRPOTrainer):
         )
         # compute_loss 里唯一一次调用即 policy 前向，保存后即为当步策略 logps
         self._last_policy_logps = logps.detach()
+        self._last_policy_logps_raw = logps  # 保留梯度，供熵正则使用
         return logps
 
     def compute_loss(self, model, inputs, return_outputs=False,
@@ -137,19 +140,46 @@ class MedicalGRPOTrainer(GRPOTrainer):
             num_items_in_batch=num_items_in_batch,
         )
         self._compute_entropy_proxy(inputs)
-        return loss
+        return self._add_entropy_bonus(loss, inputs)
+
+    def _add_entropy_bonus(self, loss, inputs):
+        """熵正则：loss += entropy_coef * mean(log p)。
+
+        等价于标准熵奖励 -entropy_coef*H 的采样代理（E[-log p] = H）：
+        高熵(探索)时 mean(log p) 更负 → loss 更小（被奖励）；低熵(坍缩)时不受益。
+        与 KL 退火互补：KL 约束与初始模型的距离，熵正则防策略坍缩。
+        """
+        coef = getattr(self, "entropy_coef", 0.0)
+        logps = getattr(self, "_last_policy_logps_raw", None)
+        if coef <= 0 or logps is None:
+            return loss
+        mask = inputs.get("completion_mask") if isinstance(inputs, dict) else None
+        if mask is None:
+            return loss
+        denom = mask.sum().clamp(min=1.0)
+        return loss + coef * (logps * mask).sum() / denom
 
     def train(self, *args, **kwargs):
-        # trl 0.15 + 部分 transformers 版本在训练收尾 _maybe_log_save_evaluate
-        # 会因 self.control 类型问题崩溃（训练本身已完成）。捕获后手动保存。
+        # trl 0.15 + 部分 transformers 版本在 _maybe_log_save_evaluate 会因
+        # self.control 类型问题崩溃。_maybe_log_save_evaluate 覆写已修正 control；
+        # 这里兜底仅当仍崩溃时手动保存（不丢已训练权重）。
         try:
             return super().train(*args, **kwargs)
         except AttributeError as e:
             if "should_evaluate" in str(e):
-                print("[GRPO] 训练已完成，收尾保存崩溃被捕获，手动保存模型")
+                print("[GRPO] 收尾保存崩溃被捕获，手动保存模型")
                 self.save_model(self.args.output_dir)
                 return
             raise
+
+    def _maybe_log_save_evaluate(self, *args, **kwargs):
+        # 根因修复：trl 0.15 与 transformers 4.49 组合下 self.control 被置为 dict，
+        # 导致每次 log 边界 _maybe_log_save_evaluate 崩溃、训练被提前截断。
+        from transformers.trainer_callback import TrainerControl
+
+        if not isinstance(self.control, TrainerControl):
+            self.control = TrainerControl()
+        return super()._maybe_log_save_evaluate(*args, **kwargs)
 
     @torch.no_grad()
     def _compute_entropy_proxy(self, inputs):
@@ -168,11 +198,14 @@ class MonitoringCallback(TrainerCallback):
         self.trainer = trainer
 
     def on_log(self, args, state, control, logs=None, **kwargs):
-        logs = logs or {}
+        # 关键：不要 return logs！transformers 4.49 的 call_event 会把回调返回值赋给
+        # control（if result is not None: control = result），返回 dict 会覆盖 self.control，
+        # 导致 _maybe_log_save_evaluate 崩溃、训练被提前截断。这里原地修改 logs 并返回 None。
+        if logs is None:
+            return
         if getattr(self.trainer, "_policy_entropy", None) is not None:
             logs["policy_entropy"] = self.trainer._policy_entropy
         logs["beta"] = getattr(self.trainer, "beta", None)
-        return logs
 
 
 def main() -> None:
@@ -181,6 +214,8 @@ def main() -> None:
     parser.add_argument("--per-device-train-batch-size", type=int, default=None,
                         help="覆盖配置里的 batch size（单卡 LoRA 建议 >= num_generations）")
     parser.add_argument("--num-generations", type=int, default=None)
+    parser.add_argument("--merge-from-sft", default=None,
+                        help="SFT LoRA adapter 路径；GRPO 从「基座+SFT merge」后的模型起训（标准 SFT→RL 链路，内存中 merge 不落盘）")
     add_lora_args(parser)
     args = parser.parse_args()
 
@@ -234,13 +269,31 @@ def main() -> None:
             "trl 0.15 在 zero3+peft 下仍会加载独立 ref model，反而吃显存）。"
         )
 
+    # SFT→GRPO 标准链路：若给 --merge-from-sft，则在内存中把基座+SFT adapter merge，
+    # 作为 GRPO 起点（不落盘，省磁盘；随后套新的 LoRA 训练）
+    model_arg = cfg["model_name_or_path"]
+    if args.merge_from_sft:
+        import torch as _torch
+        from peft import PeftModel
+        from transformers import AutoModelForCausalLM
+
+        print(f"[merge] 基座 {model_arg} + SFT adapter {args.merge_from_sft} "
+              "内存中 merge ...", flush=True)
+        _base = AutoModelForCausalLM.from_pretrained(
+            model_arg, torch_dtype=_torch.bfloat16, device_map="cpu"
+        )
+        _base = PeftModel.from_pretrained(_base, args.merge_from_sft)
+        model_arg = _base.merge_and_unload()
+        print("[merge] 完成，作为 GRPO 起点", flush=True)
+
     trainer = MedicalGRPOTrainer(
-        model=cfg["model_name_or_path"],
+        model=model_arg,
         args=grpo_config,
         train_dataset=dataset,
         reward_funcs=reward_func,
         peft_config=lora_config,
     )
+    trainer.entropy_coef = float(cfg.get("entropy_coef", 0.0))
 
     anneal = cfg.get("kl_annealing", {})
     if anneal.get("enabled", False):

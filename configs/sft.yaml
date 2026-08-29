@@ -1,11 +1,11 @@
 # SFT 配置
 model_name_or_path: "/root/autodl-tmp/models/Qwen2.5-7B-Instruct"
-dataset_path: "data/cot/smoke_cot.jsonl"
+dataset_path: "data/cot/cmb_2000_cot_verified.jsonl"
 
 # 过程验证过滤：仅保留过程分达标且无谬误步骤的样本
 # （train_cot_verified.jsonl 由 scripts/03_process_verification.py 产出）
-min_process_score: 0.6
-max_fallacies: 0
+min_process_score: 0.0
+max_fallacies: 999
 
 output_dir: "checkpoints/sft"
 num_train_epochs: 3

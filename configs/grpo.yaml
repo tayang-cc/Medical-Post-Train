@@ -1,7 +1,7 @@
 # GRPO 强化学习配置
 # 数据由 scripts/03b_build_rl_prompts.py 生成（messages 形式，自动套 chat template）
-model_name_or_path: "/root/autodl-tmp/models/Qwen2.5-7B-Instruct"
-dataset_path: "data/processed/smoke_prompts.jsonl"
+model_name_or_path: "checkpoints/sft"
+dataset_path: "data/processed/cmb_200_prompts.jsonl"
 
 output_dir: "checkpoints/grpo"
 num_train_epochs: 1
@@ -11,7 +11,7 @@ learning_rate: 1.0e-6
 lr_scheduler_type: "cosine"
 
 # GRPO 超参
-num_generations: 4            # G 需满足 2 <= G <= per_device_batch x num_processes 且整除
+num_generations: 8            # G 需满足 2 <= G <= per_device_batch x num_processes 且整除
 max_completion_length: 1024
 temperature: 1.0
 beta: 0.04                    # KL 惩罚系数初值（退火起点）
@@ -24,14 +24,17 @@ kl_annealing:
   schedule: "cosine"          # cosine | linear
   total_steps: null           # null 时自动用 state.max_steps
 
+# 熵正则：loss += entropy_coef * mean(log p)，防策略坍缩（配合 KL 退火）
+entropy_coef: 0.001
+
 # 复合 Reward 权重
 reward:
   format_weight: 1.0          # 格式硬约束
   judge_weight: 1.0           # LLM-as-Judge 连续分
-  judge_enabled: false         # false = 纯规则 reward（格式 0/1），可跳过 judge 模型
-  judge_base_url: "http://localhost:8001/v1"
+  judge_enabled: true         # false = 纯规则 reward（格式 0/1），可跳过 judge 模型
+  judge_base_url: "http://localhost:8000/v1"
   judge_model: "Qwen/Qwen2.5-32B-Instruct-AWQ"
 
 bf16: true
-gradient_checkpointing: false
+gradient_checkpointing: true
 logging_steps: 5
