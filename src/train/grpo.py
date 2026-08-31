@@ -18,7 +18,7 @@ from datasets import Dataset
 from transformers import TrainerCallback
 from trl import GRPOConfig, GRPOTrainer
 
-from src.reward.composite import CompositeReward
+from src.reward.composite import CompositeReward, PRMCompositeReward
 from src.train.lora import add_lora_args, build_lora_config
 
 
@@ -50,6 +50,7 @@ def load_prompts(path: str) -> Dataset:
                     "prompt": prompt,
                     "question": r["question"],
                     "answer": r["answer"],
+                    "options": r["options"],   # PRM 打分需要选项文本
                 }
             )
     return Dataset.from_list(rows)
@@ -231,22 +232,42 @@ def main() -> None:
 
     dataset = load_prompts(cfg["dataset_path"])
 
-    reward = CompositeReward(
-        judge_base_url=cfg["reward"]["judge_base_url"],
-        judge_model=cfg["reward"]["judge_model"],
-        format_weight=cfg["reward"]["format_weight"],
-        judge_weight=cfg["reward"]["judge_weight"],
-        enable_judge=cfg["reward"].get("judge_enabled", True),
-    )
+    prm_cfg = cfg.get("prm", {})
+    if prm_cfg.get("enabled", False):
+        # Step4：进程内 7B-PRM 替代 32B Judge
+        from src.process.prm_scorer import PRMScorer
 
-    def reward_func(prompts, completions, question, answer, **kwargs):
-        return reward(
-            completions=completions,
-            questions=question,
-            answers=answer,
+        scorer = PRMScorer(prm_cfg["base"], prm_cfg["adapter"])
+        reward = PRMCompositeReward(
+            scorer=scorer,
+            result_weight=cfg["reward"].get("result_weight", 1.0),
+            process_weight=cfg["reward"].get("process_weight", 1.0),
         )
 
-    grpo_config = GRPOConfig(
+        def reward_func(prompts, completions, question, answer, options, **kwargs):
+            return reward(
+                completions=completions,
+                questions=question,
+                answers=answer,
+                options_list=options,
+            )
+    else:
+        reward = CompositeReward(
+            judge_base_url=cfg["reward"]["judge_base_url"],
+            judge_model=cfg["reward"]["judge_model"],
+            format_weight=cfg["reward"]["format_weight"],
+            judge_weight=cfg["reward"]["judge_weight"],
+            enable_judge=cfg["reward"].get("judge_enabled", True),
+        )
+
+        def reward_func(prompts, completions, question, answer, **kwargs):
+            return reward(
+                completions=completions,
+                questions=question,
+                answers=answer,
+            )
+
+    grpo_kwargs = dict(
         output_dir=cfg["output_dir"],
         num_train_epochs=cfg["num_train_epochs"],
         per_device_train_batch_size=cfg["per_device_train_batch_size"],
@@ -261,6 +282,10 @@ def main() -> None:
         gradient_checkpointing=cfg["gradient_checkpointing"],
         logging_steps=cfg["logging_steps"],
     )
+    if not args.merge_from_sft:
+        # 模型是字符串路径时，显式 bf16 加载（否则 fp32 吃满显存）
+        grpo_kwargs["model_init_kwargs"] = {"torch_dtype": "bfloat16"}
+    grpo_config = GRPOConfig(**grpo_kwargs)
 
     lora_config = build_lora_config(args)
     if lora_config is not None:

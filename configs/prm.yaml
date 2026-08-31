@@ -1,0 +1,29 @@
+# 7B-PRM 训练配置（回归头，MSE，步级标注数据）
+model_name_or_path: "/root/autodl-tmp/models/Qwen2.5-7B-Instruct"
+train_data: "data/prm/prm_train.jsonl"
+val_data: "data/prm/prm_val.jsonl"
+output_dir: "checkpoints/prm"
+
+num_train_epochs: 2
+per_device_train_batch_size: 8
+gradient_accumulation_steps: 4
+learning_rate: 1.0e-4
+weight_decay: 0.05             # 防过拟合标注噪声
+warmup_ratio: 0.03
+max_length: 2048
+bf16: true
+gradient_checkpointing: false      # 96GB 显存足够，关闭检查点提速 ~3x（无需 enable_input_require_grads）
+logging_steps: 50
+save_steps: 500
+save_total_limit: 2
+eval_steps: 500
+early_stopping_patience: 3     # eval 上 accuracy 连续 3 次不升即停
+
+# LoRA（收敛超参：attention-only、低 r、高 dropout）
+lora_r: 8
+lora_alpha: 16
+lora_dropout: 0.1
+
+# 损失定制（PRMTrainer）
+label_smoothing: 0.05      # 抗硬 0/1 标签 + sigmoid 梯度饱和
+pos_weight: 0.55           # <1 → 负类(错误步)加权，契合漏检代价>误判

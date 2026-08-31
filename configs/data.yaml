@@ -1,7 +1,7 @@
 # 数据与 CoT 构造配置
 base_model: "Qwen/Qwen2.5-7B-Instruct"
-teacher_model: "/root/autodl-tmp/models/Qwen2.5-32B-Instruct-AWQ"   # 教师模型，生成 CoT 用（可换 DeepSeek-R1-Distill）
-judge_model: "/root/autodl-tmp/models/Qwen2.5-32B-Instruct-AWQ"     # LLM-as-Judge 模型
+teacher_model: "Qwen/Qwen2.5-72B-Instruct"   # 教师模型，生成 CoT 用（可换 DeepSeek-R1-Distill）
+judge_model: "Qwen/Qwen2.5-72B-Instruct"     # LLM-as-Judge 模型
 
 # 数据集
 datasets:
@@ -25,3 +25,14 @@ process_verification:
 # 输出路径
 output_dir: "data"
 vllm_base_url: "http://localhost:8000/v1"
+
+# 步级标注（PRM 数据集构建）
+# 7B 策略模型生成轨迹（独立 vllm: 8002）；32B Judge 投票（8000）
+# 32B Judge 只在离线构建 PRM 数据集时调用，RL 循环内部不使用
+step_annotation:
+  generator_base_url: "http://localhost:8002/v1"
+  generator_model: "/root/autodl-tmp/models/Qwen2.5-7B-Instruct"
+  judge_base_url: "http://localhost:8000/v1"
+  judge_model: "/root/autodl-tmp/models/Qwen2.5-32B-Instruct-AWQ"
+  vote_k: 3
+  min_steps: 3

@@ -16,6 +16,8 @@ from typing import Any
 from openai import OpenAI
 
 from src.answer_extraction import extract_final_answer
+from src.data.step_annotation import split_steps
+from src.process.prm_scorer import PRMScorer
 
 
 def to_text(completion: Any) -> str:
@@ -104,3 +106,56 @@ class CompositeReward:
             self.format_weight * f + self.judge_weight * j
             for f, j in zip(fmt, jdg)
         ]
+
+
+@dataclass
+class PRMCompositeReward:
+    """进程内 7B-PRM 复合奖励：格式门控 + 二进制结果 + min 聚合过程分。
+
+    RL 循环内部不调用 32B Judge（32B 仅离线构建 PRM 数据集）。
+    公式：reward = format_gate * (result_weight*result + process_weight*min(step_score))
+    - format_gate：最终答案可解析才通过（否则 0，防格式劫持）；
+    - result：抽取答案 == 标准答案（二进制）；
+    - process：整条轨迹分步打分后取 min（最薄弱步骤决定过程质量）。
+    """
+
+    scorer: PRMScorer
+    result_weight: float = 1.0
+    process_weight: float = 1.0
+    batch_size: int = 64
+
+    def __call__(self, completions: list[Any], questions: list[str],
+                 answers: list[str], options_list: list[dict]) -> list[float]:
+        texts = [to_text(c) for c in completions]
+        preds = [extract_final_answer(t) for t in texts]
+
+        # 1) 所有 completion 分步，展开成 (question, options, context, step) 打分项
+        items: list[dict] = []
+        ranges: list[tuple[int, int]] = []
+        for t, q, opt in zip(texts, questions, options_list):
+            steps = split_steps(t)
+            start = len(items)
+            context = ""
+            for s in steps:
+                items.append({"question": q, "options": opt,
+                              "context": context, "step": s})
+                context = context + s + "\n"
+            ranges.append((start, len(items)))
+
+        # 2) 批量打分（进程内 7B-PRM）
+        scores: list[float] = []
+        for i in range(0, len(items), self.batch_size):
+            scores.extend(self.scorer.score_batch(items[i:i + self.batch_size]))
+
+        # 3) 逐条合成
+        out: list[float] = []
+        for i, (pred, (s, e)) in enumerate(zip(preds, ranges)):
+            if pred is None:            # 格式门控失败
+                out.append(0.0)
+                continue
+            result = 1.0 if pred == answers[i] else 0.0
+            seg = scores[s:e]
+            process = min(seg) if seg else 0.0
+            out.append(self.result_weight * result
+                       + self.process_weight * process)
+        return out

@@ -1,0 +1,8 @@
+{
+  "step_samples": 19085,
+  "n_trajectories": 1596,
+  "step_best_f1_threshold": 0.4,
+  "step_best_f1": 0.8094750694545987,
+  "traj_best_f1_threshold": 0.4,
+  "traj_best_f1": 0.5945945945945946
+}
