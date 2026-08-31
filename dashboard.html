@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Medical Reasoning RL · CMB-200 Benchmark</title>
+  <style>
+    :root { --ink:#172033; --muted:#64748b; --line:#e2e8f0; --bg:#f6f8fb; --card:#fff; --base:#64748b; --sft:#2563eb; --grpo:#7c3aed; --prm:#059669; --good:#059669; --warn:#d97706; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.6 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Noto Sans SC", sans-serif; }
+    .shell { max-width:1240px; margin:auto; padding:30px 22px 60px; }
+    .hero { border-radius:24px; padding:34px 38px; color:#eef2ff; background:linear-gradient(125deg,#10182d,#172554 58%,#312e81); box-shadow:0 18px 55px #17255422; }
+    .eyebrow { color:#a5b4fc; font-size:12px; font-weight:800; letter-spacing:.14em; text-transform:uppercase; }
+    h1 { margin:8px 0 8px; font-size:clamp(29px,4vw,48px); line-height:1.12; letter-spacing:-.04em; }
+    .hero p { max-width:790px; margin:0; color:#c7d2fe; font-size:16px; }
+    .pills { display:flex; flex-wrap:wrap; gap:8px; margin-top:22px; }
+    .pill { border:1px solid #ffffff2c; border-radius:999px; padding:4px 10px; color:#e0e7ff; background:#ffffff12; font-size:12px; }
+    .section { margin-top:28px; }
+    .section-head { display:flex; align-items:end; justify-content:space-between; gap:16px; margin:0 2px 12px; }
+    h2 { margin:0; font-size:21px; letter-spacing:-.02em; }
+    h3 { margin:0 0 5px; font-size:15px; }
+    .sub { color:var(--muted); margin:3px 0 0; }
+    .grid { display:grid; gap:14px; }
+    .cards { grid-template-columns:repeat(5,minmax(0,1fr)); }
+    .card { border:1px solid var(--line); border-radius:16px; padding:18px; background:var(--card); box-shadow:0 4px 18px #0f172a08; }
+    .metric-label { color:var(--muted); font-size:12px; }
+    .metric { margin:4px 0 1px; font-size:30px; line-height:1.15; font-weight:800; letter-spacing:-.04em; }
+    .metric-note { color:var(--muted); font-size:12px; }
+    .accent-base { border-top:3px solid var(--base); } .accent-sft { border-top:3px solid var(--sft); } .accent-grpo { border-top:3px solid var(--grpo); } .accent-prm { border-top:3px solid var(--prm); }
+    .two { grid-template-columns:1.05fr .95fr; } .three { grid-template-columns:repeat(3,minmax(0,1fr)); }
+    .panel { border:1px solid var(--line); border-radius:18px; padding:21px; background:var(--card); }
+    .bars { display:grid; gap:13px; margin-top:18px; }
+    .bar-row { display:grid; grid-template-columns:170px 1fr 64px; align-items:center; gap:10px; }
+    .bar-label { color:#334155; font-size:13px; }
+    .bar-track { height:10px; overflow:hidden; border-radius:99px; background:#eef2f7; }
+    .bar-fill { width:0; height:100%; border-radius:99px; transition:width .9s cubic-bezier(.22,1,.36,1); }
+    .bar-value { text-align:right; color:#334155; font-variant-numeric:tabular-nums; font-size:13px; font-weight:700; }
+    .legend { display:flex; flex-wrap:wrap; gap:14px; color:var(--muted); font-size:12px; }
+    .legend i { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:5px; }
+    table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
+    th,td { border-bottom:1px solid #eef2f7; padding:10px 8px; text-align:right; white-space:nowrap; }
+    th:first-child,td:first-child { text-align:left; } th { color:var(--muted); font-size:12px; font-weight:700; } td { font-size:13px; }
+    tr:last-child td { border-bottom:0; }
+    .dot { display:inline-block; width:8px; height:8px; margin-right:6px; border-radius:50%; }
+    .base { background:var(--base); } .sft { background:var(--sft); } .grpo { background:var(--grpo); } .prm { background:var(--prm); }
+    .callout { border-left:4px solid var(--sft); border-radius:8px; padding:13px 16px; color:#334155; background:#eff6ff; }
+    .callout strong { color:#1d4ed8; }
+    .foot { color:var(--muted); font-size:12px; margin-top:24px; }
+    @media (max-width:950px) { .cards { grid-template-columns:repeat(2,1fr); } .two,.three { grid-template-columns:1fr; } }
+    @media (max-width:570px) { .shell { padding:16px 12px 40px; } .hero { padding:25px 22px; border-radius:18px; } .cards { grid-template-columns:1fr 1fr; gap:9px; } .card { padding:13px; } .metric { font-size:25px; } .bar-row { grid-template-columns:118px 1fr 56px; gap:7px; } th,td { padding:8px 4px; font-size:11px; } }
+  </style>
+</head>
+<body>
+<main class="shell">
+  <header class="hero">
+    <div class="eyebrow">Medical Reasoning RL · CMB-200 Benchmark</div>
+    <h1>Base → SFT → PRM → GRPO</h1>
+    <p>基于 Qwen2.5-7B-Instruct 的医疗复杂推理。用「真 PRM（步级过程奖励模型）」替换 LLM-as-Judge，打通「思维链构造 → 过程监督 → 强化学习」闭环，在 CMB hold-out 200 题上从 73.5% 提升到 78.0%。</p>
+    <div class="pills"><span class="pill">Qwen2.5-7B-Instruct</span><span class="pill">CMB-200 hold-out</span><span class="pill">PRM AUC 0.935</span><span class="pill">单卡 RTX PRO 6000 96G</span><span class="pill">LoRA</span></div>
+  </header>
+
+  <section class="section">
+    <div class="section-head"><div><h2>核心结果</h2><p class="sub">同一批 CMB-200 未见题目，抽取准确率（acc）。</p></div></div>
+    <div class="grid cards">
+      <div class="card accent-base"><div class="metric-label">Base 准确率</div><div class="metric">73.5%</div><div class="metric-note">零样本</div></div>
+      <div class="card accent-sft"><div class="metric-label">SFT_clean</div><div class="metric">75.0%</div><div class="metric-note">PRM 软过滤</div></div>
+      <div class="card accent-sft"><div class="metric-label">SFT_rewrite</div><div class="metric">77.5%</div><div class="metric-note">语义改写</div></div>
+      <div class="card accent-grpo"><div class="metric-label">GRPO v3</div><div class="metric">78.0%</div><div class="metric-note">PRM 奖励</div></div>
+      <div class="card"><div class="metric-label">总提升</div><div class="metric">+4.5pp</div><div class="metric-note">73.5% → 78.0%</div></div>
+    </div>
+  </section>
+
+  <section class="section grid two">
+    <article class="panel"><div class="section-head"><div><h2>准确率演进</h2><p class="sub">旧 SFT（脏数据）反降，PRM 清洗翻正，语义改写再提升。</p></div></div><div id="acc-bars" class="bars"></div><div class="legend" style="margin-top:18px"><span><i class="base"></i>Base</span><span><i class="sft"></i>SFT</span><span><i class="grpo"></i>GRPO</span></div></article>
+    <article class="panel"><div class="section-head"><div><h2>PRM 指标</h2><p class="sub">过程奖励模型（步级）判别力与检出能力。</p></div></div><div id="prm-bars" class="bars"></div></article>
+  </section>
+
+  <section class="section panel">
+    <div class="section-head"><div><h2>域偏移：格式脱敏 vs 语义改写</h2><p class="sub">PRM 对 32B 老师 CoT 打极低分的根因是措辞分布偏移，不是 markdown 格式。</p></div></div>
+    <div id="shift-bars" class="bars"></div>
+    <div class="callout" style="margin-top:18px"><strong>结论：</strong> 语义改写（32B 改写为简洁逐步风格）把 PRM 分数翻倍（0.10 → 0.215），并让生成长度 390→146 token，从根源缓解域偏移；格式脱敏几乎无效。</div>
+  </section>
+
+  <section class="section">
+    <div class="section-head"><div><h2>完整链路对比</h2><p class="sub">各阶段模型在 CMB-200 上的横向对比。</p></div></div>
+    <table><thead><tr><th>模型</th><th>acc</th><th>生成长度</th><th>说明</th></tr></thead><tbody id="model-table"></tbody></table>
+  </section>
+
+  <section class="section panel"><h2>如何读这个 Benchmark</h2><div class="grid three" style="margin-top:14px"><div><h3>准确率</h3><p class="sub">抽取「最终答案: X」与标准答案比对，只衡量最终正确性，不衡量推理质量。</p></div><div><h3>PRM 指标</h3><p class="sub">步级 AUC / 错误步召回 / 正确步召回，衡量过程监督模型本身的判别力。</p></div><div><h3>评测口径</h3><p class="sub">CMB hold-out 200 题，与训练/PRM 源严格按题目互斥；temperature 0 确定性评测。</p></div></div><p class="foot">数据口径：CMB（FreedomIntelligence）· 评测集 data/eval/cmb_eval_200.jsonl · 基座 Qwen2.5-7B-Instruct。详细协议见 README.md / README1.md。</p></section>
+</main>
+<script>
+const MODELS = [
+  {k:'base', name:'Base', color:'base', acc:73.5, len:277, note:'零样本'},
+  {k:'old_sft', name:'旧 SFT（脏）', color:'base', acc:68.0, len:398, note:'1605 脏 CoT，反降'},
+  {k:'sft_clean', name:'SFT_clean', color:'sft', acc:75.0, len:390, note:'PRM 软过滤'},
+  {k:'sft_rewrite', name:'SFT_rewrite', color:'sft', acc:77.5, len:146, note:'语义改写'},
+  {k:'grpo', name:'GRPO v3', color:'grpo', acc:78.0, len:120, note:'PRM 奖励 + lr 5e-6'},
+];
+const PRM = [
+  {label:'Step AUC', v:0.935, fmt:'0.935'},
+  {label:'错误步召回', v:0.86, fmt:'0.86'},
+  {label:'正确步召回', v:0.85, fmt:'0.85'},
+  {label:'min 聚合轨迹 AUC', v:0.938, fmt:'0.938'},
+];
+const SHIFT = [
+  {label:'原始 32B CoT', v:0.101, color:'base', fmt:'0.101'},
+  {label:'格式脱敏（去 markdown）', v:0.120, color:'sft', fmt:'0.120'},
+  {label:'语义改写（简洁风格）', v:0.215, color:'prm', fmt:'0.215'},
+];
+const pct=(x)=>`${Number(x).toFixed(1)}%`;
+function bar(label,value,max,color,fmt){return `<div class="bar-row"><div class="bar-label">${label}</div><div class="bar-track"><div class="bar-fill ${color}" style="width:${Math.max(0,Math.min(100,value/max*100))}%"></div></div><div class="bar-value">${fmt||value}</div></div>`}
+function render(){
+  const accKeys=[{k:'base',color:'base'},{k:'old_sft',color:'base'},{k:'sft_clean',color:'sft'},{k:'sft_rewrite',color:'sft'},{k:'grpo',color:'grpo'}];
+  document.querySelector('#acc-bars').innerHTML = accKeys.map(({k,color})=>{const m=MODELS.find(x=>x.k===k);return bar(m.name+' · acc', m.acc, 100, color, pct(m.acc));}).join('');
+  document.querySelector('#prm-bars').innerHTML = PRM.map(p=>bar(p.label, p.v, 1, 'prm', p.fmt)).join('');
+  document.querySelector('#shift-bars').innerHTML = SHIFT.map(s=>bar(s.label, s.v, 0.3, s.color, s.fmt)).join('');
+  document.querySelector('#model-table').innerHTML = MODELS.map(m=>`<tr><td><span class="dot ${m.color}"></span><span class="model-name">${m.name}</span></td><td>${pct(m.acc)}</td><td>${m.len}</td><td>${m.note}</td></tr>`).join('');
+}
+render();
+</script>
+</body>
+</html>

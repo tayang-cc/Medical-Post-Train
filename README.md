@@ -115,6 +115,27 @@ bash scripts/serve_vllm.sh /root/autodl-tmp/models/Qwen2.5-7B-Instruct 8002 1
 - **DAPO vs GRPO**：`configs/dapo.yaml` 默认去掉 KL 惩罚（论文 §2.3，`beta=0`）、`eps_low=0.2 / eps_high=0.28`。由于 trl 0.15 没有 old-policy 缓冲，clip-higher 的 ratio 采用「当前策略 vs 冻结参考模型」，语义等价（见 `src/train/dapo.py` 文件头注释）。想保留 KL 约束可把 `beta` 调回 0.001~0.04 并开启 `kl_annealing`。
 - **LoRA 单卡**：`--lora` 开关（`src/train/lora.py`）。注意 trl 0.15 在 deepspeed zero3 + peft 下仍加载独立 ref model（省显存失效），所以 LoRA 必须**直接 `python` 单进程跑**（`scripts/05*_lora.sh`），且 `per_device_train_batch_size >= num_generations`。LoRA 训练产物是 adapter，评测前需用 `vllm serve <基座> --enable-lora --lora-modules name=<checkpoints/...>` 挂载，或先 merge 成完整权重。
 
+## 训练硬件与耗时
+
+所有训练均在**单张 NVIDIA RTX PRO 6000 Blackwell（96 GB）**上完成，policy/PRM 均 bf16 + LoRA。
+
+| 阶段 | 数据规模 | 耗时 | 峰值显存 |
+|---|---|---|---|
+| PRM 步级标注 | 2000 题 × 4 轨迹（32B Judge 投票） | ~3-4 小时 | ~62 GB（7B+32B 双 vllm） |
+| PRM 训练 | 7.4 万步样本 × 2 epoch | ~2-4 小时（含调参） | ~25 GB |
+| 语义改写 | 1605 条（32B 改写） | ~40 分钟 | ~62 GB |
+| PRM 软过滤 | 1605 条（7B-PRM 打分） | ~7 分钟 | ~15 GB |
+| SFT（LoRA） | ~1400 条 × 3 epoch | ~5 分钟 | ~25 GB |
+| GRPO | 500 题 × G=4 × 125 步 | 45 分钟（短生成）~2 小时（长生成） | ~62 GB |
+| 评测 | 200 题 × batch 8 | ~5 分钟 | ~15 GB |
+
+## 文档导航
+
+- [README.md](README.md)：快速上手 + 实验记录 + 结果
+- [README1.md](README1.md)：技术文档（架构 / PRM / 域偏移 / 教训沉淀）
+- [README3.md](README3.md)：全流程实例变化展示
+- [dashboard.html](dashboard.html)：实验对比仪表盘（静态，浏览器直接打开）
+
 ## 实验记录（Smoke Test）
 
 > 2026-08 冒烟验证：管线端到端跑通 + 拿到对比表。完整复现方式见下文「说明」。
