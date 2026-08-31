@@ -7,19 +7,25 @@
 ## 流水线
 
 ```
-MedQA / MedMCQA
+CMB（中文医学基准）
       │
       ▼
-[1] CoT 构造 ── 教师模型生成推理链 + 过程验证(PRM/Judge)过滤
+[0] 问题库 ─── 严格隔离切分 pool_{sft,rl,val,test}（互斥）
       │
       ▼
-[2] SFT ────── Qwen2.5-7B-Instruct 在过程验证通过的高质量 CoT 数据上微调
+[1] CoT 构造 ─ 教师(32B)生成推理链 → 语义改写对齐风格 → PRM 软过滤
       │
       ▼
-[3] RL ─────── GRPO / DAPO，复合 Reward = 格式硬约束 + LLM-as-Judge 连续打分
+[2] SFT ────── Qwen2.5-7B-Instruct 在清洗后的 CoT 上微调
       │
       ▼
-[4] 评测 ───── MedQA / MedMCQA 准确率
+[3] RL ─────── GRPO，Reward = 格式门控 + 二进制结果 + PRM(min聚合)过程分
+      │
+      ▼
+[4] 评测 ───── CMB hold-out 200 题准确率
+
+PRM（过程奖励模型）自成一条支线：
+  7B 策略生成轨迹 → 32B Judge 步级投票标注 → 训练 7B-PRM → 供 SFT 过滤 + RL 奖励
 ```
 
 ## 目录结构
@@ -28,72 +34,75 @@ MedQA / MedMCQA
 configs/            训练与数据配置 (yaml / json)
 scripts/            端到端脚本 (bash / python)
 src/answer_extraction.py  统一的最终答案抽取（reward / CoT / 评测共用）
-src/data/           CoT 构造 + 过程验证
-src/reward/         复合 Reward 函数
-src/train/          SFT + GRPO 训练入口
-src/eval/           MedQA / MedMCQA 评测
-data/raw|cot|processed/  数据
-checkpoints/        模型权重
+src/data/           问题库切分 + CoT 构造 + 步级标注
+src/process/        PRM 推理打分器
+src/reward/         复合 Reward 函数（Judge / PRM 两种）
+src/train/          SFT + GRPO + DAPO 训练入口
+src/eval/           评测（transformers 直接 / vllm 双轨）
+data/raw|cot|splits|prm|processed|eval/  数据
+checkpoints/        模型权重（base 未含，adapter 落盘）
 ```
 
 ## 快速开始
 
 ```bash
-# 1. 安装依赖（trl 版本已固定，见 requirements.txt）
+# 1. 安装依赖（trl 已固定 0.15.0，见 requirements.txt）
 pip install -r requirements.txt
 
-# 2. 下载并处理数据
-python scripts/01_prepare_data.py
+# 2. 数据准备 + 问题库严格隔离切分
+python scripts/01b_prepare_data_cmb.py
+python scripts/00_build_problem_library.py
 
-# 3. 教师模型构造 CoT（需 GPU + vLLM，可先跳过直接复用现成 SFT 数据）
-bash scripts/serve_vllm.sh Qwen/Qwen2.5-72B-Instruct 8000 1
+# 3. 教师(32B)生成 CoT（需 vllm，端口 8000）
+bash scripts/serve_vllm.sh /root/autodl-tmp/models/Qwen2.5-32B-Instruct-AWQ 8000 1
 python scripts/02_build_cot_data.py --config configs/data.yaml
 
-# 4. 过程验证过滤（产出 train_cot_verified.jsonl）
-python scripts/03_process_verification.py --config configs/data.yaml
+# ---- PRM 支线（过程奖励模型）----
+# 4. 步级标注：7B 生成轨迹 + 32B Judge 投票（生成器端口 8002，Judge 端口 8000）
+python scripts/07_step_annotation.py --limit 2000 --train-ratio 0.8
+# 5. 训练 7B-PRM
+python scripts/08_train_prm.py --config configs/prm.yaml
+# 6. 阈值扫描（可选，产出 RL 用阈值报告）
+python scripts/09_scan_prm_threshold.py
 
-# 4b. 构造 GRPO 训练数据（rl_prompts.jsonl）
-python scripts/03b_build_rl_prompts.py
+# ---- SFT 主线 ----
+# 7. 语义改写 CoT（对齐 PRM 风格）+ PRM 软过滤
+python scripts/12_rewrite_cot.py            # 32B 改写为简洁风格
+python scripts/10_clean_sft_data.py         # PRM 软过滤（删极端低分）
+# 8. SFT（单卡 LoRA 直接 python 跑）
+python src/train/sft.py --config configs/sft.yaml --lora
 
-# 5. SFT（多卡；单卡加 --num_processes 1；单卡低显存加 --lora 直接 python 跑）
-bash scripts/04_train_sft.sh
-# 单卡 LoRA 版：python src/train/sft.py --config configs/sft.yaml --lora
+# 9. 构造 RL 数据（排除 PRM 源，含 options）
+python scripts/04_build_rl_prompts.py --limit 500
 
-# 6. GRPO 强化学习（先起 Judge vLLM，见 scripts/05_train_grpo.sh 注释）
-bash scripts/serve_vllm.sh Qwen/Qwen2.5-32B-Instruct-AWQ 8001 1
-bash scripts/05_train_grpo.sh
+# 10. GRPO（from SFT merge + PRM 奖励，RL 内不再调 32B Judge）
+python src/train/grpo.py --config configs/grpo.yaml --lora --merge-from-sft checkpoints/sft_rewrite
 
-# 6b. 或改用 DAPO（token-level loss + clip-higher + dynamic sampling + overlong shaping）
-bash scripts/05b_train_dapo.sh
-
-# 6c. 单卡低显存：LoRA 版（直接 python 单进程，勿走 accelerate/deepspeed）
-bash scripts/05_train_grpo_lora.sh     # GRPO + LoRA
-bash scripts/05b_train_dapo_lora.sh    # DAPO + LoRA
-
-# 7. 评测（双轨：抽取准确率 + LLM-as-Judge 质量分）
-bash scripts/serve_vllm.sh checkpoints/grpo 8000 1
-bash scripts/serve_vllm.sh Qwen/Qwen2.5-32B-Instruct-AWQ 8001 1   # judge 轨，可省
-bash scripts/06_eval.sh
+# 11. 评测
+python src/eval/eval_transformers.py --model <base> --adapter <adapter> \
+    --data data/eval/cmb_eval_200.jsonl --batch-size 8
 ```
 
 ## 关键组件
 
-- `src/reward/composite.py`：复合 Reward = 格式检查（硬约束）+ LLM-as-Judge（连续打分）
-- `src/data/cot_construction.py`：教师模型生成 CoT 推理链
-- `src/data/process_verification.py`：LLM-as-Judge 过程监督打分
-- `src/train/grpo.py`：GRPO 强化学习 + KL 退火（`KLAnnealingCallback`）+ 熵监控（`MedicalGRPOTrainer` / `MonitoringCallback`）
-- `src/train/dapo.py`：DAPO（`DAPOTrainer`）＝ GRPO + token-level loss + clip-higher + dynamic sampling + overlong shaping（参考 DAPO 论文）
-- `src/eval/medqa.py`：MedQA / MedMCQA 评测，双轨制 = 抽取准确率（acc / miss_rate / avg_length）+ LLM-as-Judge 质量分（judge_mean / judge_pass_rate），方便基座/SFT/GRPO/DAPO 横向对比
-- `scripts/serve_vllm.sh`：vLLM 服务启动（教师 / Judge 模型通用）
+- `src/data/problem_library.py`：可验证问题库严格隔离切分（sft/rl/val/test 互斥）
+- `src/data/step_annotation.py`：步级标注（split_steps + 32B Judge K=3 投票）
+- `src/process/prm_scorer.py`：7B-PRM 推理打分器（sigmoid 输出 [0,1]，批量打分）
+- `src/reward/composite.py`：复合 Reward = `CompositeReward`（Judge 连续分）+ `PRMCompositeReward`（格式门控 + 二进制结果 + PRM min 聚合）
+- `src/train/grpo.py`：GRPO + KL 退火（`KLAnnealingCallback`）+ 熵监控（`MedicalGRPOTrainer` / `MonitoringCallback`）
+- `src/train/dapo.py`：DAPO（`DAPOTrainer`）＝ GRPO + token-level loss + clip-higher + dynamic sampling + overlong shaping
+- `src/train/sft.py`：SFT（LoRA，消息列表 prompt/completion）
+- `src/eval/eval_transformers.py`：transformers 直接评测（单 adapter）；`src/eval/eval_stacked.py`：链式评测（merge adapter + 叠加 adapter，用于 GRPO 产物）
+- `scripts/serve_vllm.sh`：vLLM 服务启动（32B teacher / Judge / 改写通用）
 
 ## 模型服务（vLLM）
 
 ```bash
-# 教师模型（CoT 构造 / 过程验证）
-bash scripts/serve_vllm.sh Qwen/Qwen2.5-72B-Instruct 8000 1
+# 教师/Judge/改写 模型（32B AWQ，端口 8000）
+bash scripts/serve_vllm.sh /root/autodl-tmp/models/Qwen2.5-32B-Instruct-AWQ 8000 1
 
-# Judge 模型（RL 连续打分）
-bash scripts/serve_vllm.sh Qwen/Qwen2.5-72B-Instruct 8001 1
+# 步级标注的轨迹生成器（7B，端口 8002）
+bash scripts/serve_vllm.sh /root/autodl-tmp/models/Qwen2.5-7B-Instruct 8002 1
 ```
 
 ## 训练注意事项
@@ -101,8 +110,8 @@ bash scripts/serve_vllm.sh Qwen/Qwen2.5-72B-Instruct 8001 1
 - **版本**：`trl` 已固定为 `0.15.0`（GRPO/SFT 接口按其适配）。升级 trl 前先看 reward 签名与 `beta`/callback 是否兼容。
 - **DeepSpeed**：`configs/accelerate.yaml` 是 accelerate 启动配置，真正的 DeepSpeed 参数在 `configs/ds_zero3.json`。不要在 `sft.yaml` / `grpo.yaml` 里再写 `deepspeed:`（会与 accelerate 冲突）。
 - **单卡**：`accelerate launch --config_file configs/accelerate.yaml --num_processes 1`，且保证 GRPO 的 `num_generations` 整除 `per_device_train_batch_size x num_processes`（默认 G=8 时单卡需 `per_device_train_batch_size=8`，脚本会在启动时校验并提示）。
-- **数据链路**：SFT 输入为 `03` 步产出的 `train_cot_verified.jsonl`（已按 `min_process_score` / `max_fallacies` 过滤）；GRPO 输入为 `03b` 步产出的 `data/processed/rl_prompts.jsonl`。
-- **Judge 成本**：RL 每步会对每组 G 条采样各调一次 72B Judge，是主要开销。可先用小数据集验证，后续建议 LoRA 训练专用 verifier 替换。
+- **数据链路**：SFT 输入为语义改写 + PRM 软过滤后的 CoT（`10`/`12` 步产出）；GRPO 输入为 `04_build_rl_prompts.py` 产出的 `data/processed/rl_prompts.jsonl`（排除 PRM 源、含 `options`）。
+- **RL 奖励**：正式链路用进程内 7B-PRM（`PRMCompositeReward`），**RL 循环内不再调 32B Judge**；32B 只在离线步级标注、CoT 语义改写时用。
 - **DAPO vs GRPO**：`configs/dapo.yaml` 默认去掉 KL 惩罚（论文 §2.3，`beta=0`）、`eps_low=0.2 / eps_high=0.28`。由于 trl 0.15 没有 old-policy 缓冲，clip-higher 的 ratio 采用「当前策略 vs 冻结参考模型」，语义等价（见 `src/train/dapo.py` 文件头注释）。想保留 KL 约束可把 `beta` 调回 0.001~0.04 并开启 `kl_annealing`。
 - **LoRA 单卡**：`--lora` 开关（`src/train/lora.py`）。注意 trl 0.15 在 deepspeed zero3 + peft 下仍加载独立 ref model（省显存失效），所以 LoRA 必须**直接 `python` 单进程跑**（`scripts/05*_lora.sh`），且 `per_device_train_batch_size >= num_generations`。LoRA 训练产物是 adapter，评测前需用 `vllm serve <基座> --enable-lora --lora-modules name=<checkpoints/...>` 挂载，或先 merge 成完整权重。
 
