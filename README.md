@@ -188,7 +188,7 @@ bash scripts/serve_vllm.sh /root/autodl-tmp/models/Qwen2.5-7B-Instruct 8002 1
 1. **可验证问题库严格隔离**：`scripts/00_build_problem_library.py` 把 CMB 切成 `pool_{sft,rl,val,test}.jsonl`（互斥，17万/3.6万/1.2万/2.4万）。
 2. **步级标注**：`scripts/07_step_annotation.py` 用 **7B 策略模型**每题材 4 条轨迹（保留错误轨迹供负样本），**32B Judge 每步 K=3 投票**（≥2 票一致保留，无法多数则丢步），产出 9.3 万步样本（正负比 64/36）。源题目取 pool_rl 前 2000 题，内部切 PRM-train 1600 / PRM-val 400（早停，禁碰全局 TEST）。
 3. **训练 7B-PRM**：`scripts/08_train_prm.py` 用 sigmoid+BCE 回归头（`num_labels=1, problem_type=single_label_classification`）+ label smoothing(0.05) + pos_weight(0.55，加权错误步) + attention-only LoRA(r=8)。PRM-val 上早停，指标含 AUC / 错误步检出 / pos_recall（监控过度纠偏）。
-4. **PRM 清洗 SFT + GRPO 接入**：`src/reward/composite.py::PRMCompositeReward` = 格式门控 + 二进制结果 + min 聚合 PRM 分数，**RL 循环内不再调 32B Judge**；`scripts/10_clean_sft_data.py` 用 PRM 软过滤 SFT 数据。
+4. **PRM 清洗 SFT + GRPO 接入**：`src/reward/composite.py::PRMCompositeReward` = 格式门控 + 二进制结果 + 软min 聚合 PRM 分数（`0.3×min+0.7×mean`）+ 长度激励 + 非负 floor，**RL 循环内不再调 32B Judge**；`scripts/10_clean_sft_data.py` 用 PRM 软过滤 SFT 数据。
 
 ### 结果（CMB-200 评测，与正式实验同评测集）
 
@@ -199,10 +199,12 @@ bash scripts/serve_vllm.sh /root/autodl-tmp/models/Qwen2.5-7B-Instruct 8002 1
 | SFT_clean（PRM 软过滤后 1185 条） | 75.0% | 只删 min-score<0.02 的 26% 极端低分样本 |
 | GRPO v1（SFT_clean + PRM 奖励，lr 1e-6） | 76.0% | kl≈0.0007 策略几乎未动 |
 | SFT_rewrite（32B 语义改写 + 软过滤 1432 条） | 77.5% | 生成长度 390→146，风格对齐 PRM |
-| **GRPO v3（SFT_rewrite + PRM 奖励，lr 5e-6）** | **78.0%** | 最终结果 |
+| GRPO v3（SFT_rewrite + PRM 奖励，lr 5e-6，min 聚合） | 78.0% | kl≈0.0017 |
+| GRPO v4（软min + 长度激励 + 2 epoch） | 78.0% | kl≈0.007 但 acc 不变，见下方结论 |
 
 - **PRM 指标**：step AUC **0.935** / 错误步 recall 0.86 / pos recall 0.85（无过度纠偏）；min 聚合轨迹级 AUC **0.938**；推理侧越界占比 0.000%（sigmoid 输出天然落 [0,1]）。
 - **完整链路**：base 73.5% → **78.0%（+4.5%）**。三阶段各司其职：① PRM 软过滤 SFT（68→75，SFT 翻正）② 语义改写（75→77.5，缓解域偏移）③ GRPO+PRM 奖励（77.5→78，小增益）。
+- **GRPO 天花板（v4 调参实验）**：v4 把过程奖励改成**软 min（0.3×min+0.7×mean）+ 长度激励 + 2 epoch**，kl 从 0.0017 涨到 **0.007（策略移动 4 倍）**，但 acc 仍是 **78.0%**——策略动得更多，解题能力却没涨。这从实验上坐实：**CMB 的瓶颈是 7B 的医学知识量，不是奖励函数/优化目标**，GRPO 超参再调是边际收益趋零。要破 78% 只能换更大基座 / 多采样投票，而非调 GRPO。
 
 ### 域偏移的解决：格式脱敏 vs 语义改写（对照实验）
 

@@ -4,7 +4,7 @@ model_name_or_path: "/root/autodl-tmp/models/Qwen2.5-7B-Instruct"   # 基座；�
 dataset_path: "data/processed/rl_prompts.jsonl"
 
 output_dir: "checkpoints/grpo"
-num_train_epochs: 1
+num_train_epochs: 2            # v4 调参：1 → 2，多一轮优化（500 题 × 2 epoch）
 per_device_train_batch_size: 4
 gradient_accumulation_steps: 4
 learning_rate: 5.0e-6           # 调参：风格已对齐，用适中 lr（v1=1e-6 太保守 / v2=1e-5 过拟合）
@@ -35,7 +35,10 @@ reward:
   judge_base_url: "http://localhost:8001/v1"
   judge_model: "Qwen/Qwen2.5-32B-Instruct-AWQ"
   result_weight: 1.0          # 二进制结果奖励权重
-  process_weight: 1.0         # PRM min 聚合过程奖励权重
+  process_weight: 1.0         # PRM 过程奖励权重
+  min_weight: 0.3             # 软min权重：process = 0.3*min + 0.7*mean（v4）
+  length_penalty: 0.2         # 过短惩罚强度（防跳过推理直接给答案）
+  min_len: 75                 # 低于该字符数视为「无推理」（≈50 token）
 
 # 进程内 7B-PRM（替代 32B Judge，仅离线构建 PRM 数据集时用 32B）
 prm:

@@ -242,6 +242,9 @@ def main() -> None:
             scorer=scorer,
             result_weight=cfg["reward"].get("result_weight", 1.0),
             process_weight=cfg["reward"].get("process_weight", 1.0),
+            min_weight=cfg["reward"].get("min_weight", 0.3),
+            length_penalty=cfg["reward"].get("length_penalty", 0.2),
+            min_len=cfg["reward"].get("min_len", 75),
         )
 
         def reward_func(prompts, completions, question, answer, options, **kwargs):

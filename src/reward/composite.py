@@ -110,18 +110,25 @@ class CompositeReward:
 
 @dataclass
 class PRMCompositeReward:
-    """进程内 7B-PRM 复合奖励：格式门控 + 二进制结果 + min 聚合过程分。
+    """进程内 7B-PRM 复合奖励：格式门控 + 二进制结果 + 软min聚合过程分 + 长度激励。
 
     RL 循环内部不调用 32B Judge（32B 仅离线构建 PRM 数据集）。
-    公式：reward = format_gate * (result_weight*result + process_weight*min(step_score))
-    - format_gate：最终答案可解析才通过（否则 0，防格式劫持）；
+    公式：
+      process = min_weight*min(step_score) + (1-min_weight)*mean(step_score)   # 软min
+      length_bonus = -length_penalty * max(0, min_len - len(text)) / min_len    # 过短惩罚
+      raw = result_weight*result + process_weight*process + length_bonus
+      reward = max(0.0, raw)                                                    # 非负 floor
     - result：抽取答案 == 标准答案（二进制）；
-    - process：整条轨迹分步打分后取 min（最薄弱步骤决定过程质量）。
+    - process：软 min（min 保留致命错误信号，mean 提供平滑梯度）；
+    - length_bonus：防「跳过推理直接给答案」的坍缩。
     """
 
     scorer: PRMScorer
     result_weight: float = 1.0
     process_weight: float = 1.0
+    min_weight: float = 0.3          # 软min权重：0.3*min + 0.7*mean
+    length_penalty: float = 0.2      # 过短惩罚强度
+    min_len: float = 75              # 低于该字符数视为「无推理」（≈50 token）
     batch_size: int = 64
 
     def __call__(self, completions: list[Any], questions: list[str],
@@ -155,7 +162,16 @@ class PRMCompositeReward:
                 continue
             result = 1.0 if pred == answers[i] else 0.0
             seg = scores[s:e]
-            process = min(seg) if seg else 0.0
-            out.append(self.result_weight * result
-                       + self.process_weight * process)
+            if seg:
+                mn = min(seg)
+                avg = sum(seg) / len(seg)
+                process = self.min_weight * mn + (1 - self.min_weight) * avg
+            else:
+                process = 0.0
+            n_len = len(texts[i])
+            length_bonus = 0.0
+            if n_len < self.min_len:
+                length_bonus = -self.length_penalty * (self.min_len - n_len) / self.min_len
+            raw = self.result_weight * result + self.process_weight * process + length_bonus
+            out.append(max(0.0, raw))
         return out
